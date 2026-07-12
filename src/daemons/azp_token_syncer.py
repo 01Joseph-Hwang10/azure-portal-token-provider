@@ -23,7 +23,7 @@ class AZPTokenSyncerDaemon:
 
     async def run(self):
         while True:
-            async with AsyncCamoufox() as browser:
+            async with AsyncCamoufox(headless=False) as browser:
                 page = await browser.new_page()
                 await page.goto("https://portal.azure.com")
                 await page.wait_for_function(
