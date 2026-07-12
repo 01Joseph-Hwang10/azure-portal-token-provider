@@ -6,6 +6,13 @@ from typing import TypedDict
 from camoufox.async_api import AsyncCamoufox
 
 
+class AuthState(TypedDict):
+    authHeader: str
+    expiresAt: int
+    expiresInMs: int
+    tokenType: str
+
+
 class AZPTokenSyncerDaemon:
 
     def __init__(self):
@@ -13,7 +20,7 @@ class AZPTokenSyncerDaemon:
         self.stop_requested = False
         self.stopped = False
 
-    def get_auth_state(self) -> "AuthState" | None:
+    def get_auth_state(self) -> AuthState | None:
         if not self.auth_state:
             return None
         expires_at = datetime.fromtimestamp(self.auth_state["expiresAt"])
@@ -26,10 +33,19 @@ class AZPTokenSyncerDaemon:
             async with AsyncCamoufox(headless=False) as browser:
                 page = await browser.new_page()
                 await page.goto("https://portal.azure.com")
-                await page.wait_for_function(
-                    "window.location.href === 'https://portal.azure.com/#home'",
-                    timeout=0,
-                )
+                while True:
+                    try:
+                        await page.wait_for_function(
+                            "window.location.href === 'https://portal.azure.com/#home'",
+                            timeout=5000,
+                        )
+                    except Exception:
+                        if self.stop_requested:
+                            break
+                        await asyncio.sleep(1)
+
+                if self.stop_requested:
+                    break
 
                 while True:
                     auth_state_raw = await page.evaluate(
@@ -62,12 +78,11 @@ class AZPTokenSyncerDaemon:
 
     async def stop(self):
         self.stop_requested = True
+        timeout = 30
         while not self.stopped:
             await asyncio.sleep(1)
-
-
-class AuthState(TypedDict):
-    authHeader: str
-    expiresAt: int
-    expiresInMs: int
-    tokenType: str
+            timeout -= 1
+            if timeout <= 0:
+                break
+        if not self.stopped:
+            raise RuntimeError("Failed to stop AZPTokenSyncerDaemon within timeout")
