@@ -74,3 +74,7 @@ If the token is expired or not available for some reason, it will return:
   "expires_at": null
 }
 ```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
