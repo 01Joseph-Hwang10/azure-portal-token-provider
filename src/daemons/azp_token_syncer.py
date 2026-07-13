@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import signal
+import sys
 from datetime import datetime, timezone
 from logging import Logger, getLogger
 from typing import Any
@@ -54,14 +56,21 @@ class AZPTokenSyncerDaemon:
                             "Waiting for Azure Portal to be logged in by user..."
                         )
                         while not self.stop_requested:
+                            if not browser.is_connected():
+                                self.logger.warning("Browser disconnected.")
+                                break
                             try:
                                 await page.wait_for_function(
                                     "() => window.location.href === 'https://portal.azure.com/#home'",  # noqa: E501
                                     timeout=2000,
                                 )
                                 break
-                            except Exception:
+                            except Exception as e:
                                 if self.stop_requested:
+                                    break
+                                # If the page is closed, break the inner loop to restart
+                                if "Target closed" in str(e) or "Target page, context or browser has been closed" in str(e):
+                                    self.logger.warning("Browser page closed.")
                                     break
                                 await asyncio.sleep(1)
 
@@ -73,6 +82,9 @@ class AZPTokenSyncerDaemon:
                         )
 
                         while not self.stop_requested:
+                            if not browser.is_connected():
+                                self.logger.warning("Browser disconnected.")
+                                break
                             auth_state = None
                             while not self.stop_requested and auth_state is None:
                                 try:
@@ -89,7 +101,13 @@ class AZPTokenSyncerDaemon:
                                         )
                                         await asyncio.sleep(1)
                                         continue
+                                    if "Target closed" in str(e) or "Target page, context or browser has been closed" in str(e):
+                                        self.logger.warning("Browser page closed.")
+                                        break
                                     raise
+                            
+                            if auth_state is None:
+                                break
 
                             self.logger.info(
                                 "Retrieved authState from sessionStorage. "
@@ -144,6 +162,9 @@ class AZPTokenSyncerDaemon:
                         if self.stop_requested:
                             break
                         await asyncio.sleep(1)
+                finally:
+                    # Give some time for playwright to clean up
+                    await asyncio.sleep(0.1)
         finally:
             self.stopped = True
             self.logger.info("AZPTokenSyncerDaemon loop exited.")
@@ -179,14 +200,25 @@ if __name__ == "__main__":
             daemon.logger.info("Signal received, requesting stop...")
             daemon.stop_requested = True
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, handle_exit)
-            except NotImplementedError:
-                pass
+        if os.name != "nt":
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, handle_exit)
+                except NotImplementedError:
+                    pass
+        else:
+            def handle_exit_win(sig, frame):
+                daemon.logger.info(f"Signal {sig} received, requesting stop...")
+                daemon.stop_requested = True
+
+            signal.signal(signal.SIGINT, handle_exit_win)
+            signal.signal(signal.SIGTERM, handle_exit_win)
 
         try:
             await daemon.run()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            daemon.logger.info("Daemon interrupted.")
+            daemon.stop_requested = True
         finally:
             await daemon.stop()
 

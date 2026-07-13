@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import signal
 from datetime import datetime, timedelta, timezone
 from logging import Logger, getLogger
@@ -76,9 +77,26 @@ if __name__ == "__main__":
             daemon.logger.info("Signal received, requesting stop...")
             daemon.stop_requested = True
 
-        loop.add_signal_handler(signal.SIGINT, handle_exit)
-        loop.add_signal_handler(signal.SIGTERM, handle_exit)
+        if os.name != "nt":
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, handle_exit)
+                except NotImplementedError:
+                    pass
+        else:
+            def handle_exit_win(sig, frame):
+                daemon.logger.info(f"Signal {sig} received, requesting stop...")
+                daemon.stop_requested = True
 
-        await daemon.run()
+            signal.signal(signal.SIGINT, handle_exit_win)
+            signal.signal(signal.SIGTERM, handle_exit_win)
+
+        try:
+            await daemon.run()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            daemon.logger.info("Daemon interrupted.")
+            daemon.stop_requested = True
+        finally:
+            await daemon.stop()
 
     asyncio.run(main())
