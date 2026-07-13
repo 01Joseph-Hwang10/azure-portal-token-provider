@@ -1,58 +1,62 @@
 import asyncio
-import json
 import logging
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 from logging import Logger, getLogger
-from typing import TypedDict
+from typing import Any
 
-from camoufox.async_api import AsyncCamoufox
-
-
-class AuthState(TypedDict):
-    authHeader: str
-    expiresAt: int
-    expiresInMs: int
-    tokenType: str
+from playwright.async_api import async_playwright
 
 
 class AZPTokenSyncerDaemon:
 
     def __init__(self, *, logger: Logger = getLogger("AZPTokenSyncerDaemon")):
         self.logger = logger
-        self.auth_state: AuthState | None = None
+        self.auth_state: dict[str, Any] | None = None
         self.stop_requested = False
         self.stopped = False
 
-    def get_auth_state(self) -> AuthState | None:
+    def get_token(self) -> str | None:
         if not self.auth_state:
             return None
-        expires_at = datetime.fromtimestamp(self.auth_state["expiresAt"])
-        if expires_at < datetime.now():
+        expires_at = datetime.fromtimestamp(
+            int(self.auth_state["expiresOn"]), tz=timezone.utc
+        )
+        if expires_at < datetime.now(tz=timezone.utc):
             return None
-        return self.auth_state
+        return self.auth_state["secret"]
+
+    def get_expires_at(self) -> datetime | None:
+        if not self.auth_state:
+            return None
+        return datetime.fromtimestamp(
+            int(self.auth_state["expiresOn"]), tz=timezone.utc
+        )
 
     async def run(self):
         self.logger.info("Starting AZPTokenSyncerDaemon...")
 
         try:
             while not self.stop_requested:
-                options = {
-                    "headless": False,
-                    "handle_sigint": False,
-                    "handle_sigterm": False,
-                    "handle_sighup": False,
-                }
                 try:
-                    async with AsyncCamoufox(**options) as browser:
-                        page = await browser.new_page()
+                    async with async_playwright() as p:
+                        browser = await p.firefox.launch(
+                            headless=False,
+                            handle_sigint=False,
+                            handle_sigterm=False,
+                            handle_sighup=False,
+                        )
+                        context = await browser.new_context()
+                        page = await context.new_page()
                         await page.goto("https://portal.azure.com")
 
-                        self.logger.info("Waiting for Azure Portal to be logged in by user...")
+                        self.logger.info(
+                            "Waiting for Azure Portal to be logged in by user..."
+                        )
                         while not self.stop_requested:
                             try:
                                 await page.wait_for_function(
-                                    "window.location.href === 'https://portal.azure.com/#home'",
+                                    "() => window.location.href === 'https://portal.azure.com/#home'",  # noqa: E501
                                     timeout=2000,
                                 )
                                 break
@@ -64,28 +68,63 @@ class AZPTokenSyncerDaemon:
                         if self.stop_requested:
                             break
 
+                        self.logger.info(
+                            "Azure Portal logged in. Starting token sync loop..."
+                        )
+
                         while not self.stop_requested:
-                            auth_state_raw = await page.evaluate(
-                                'window.sessionStorage.getItem("authState")'
-                            )
-                            if auth_state_raw is None:
-                                break
+                            auth_state = None
+                            while not self.stop_requested and auth_state is None:
+                                try:
+                                    auth_state = await page.evaluate(
+                                        'Object.entries(window.sessionStorage).filter(([key]) => key.includes("accesstoken")).map(([key, value]) => [key, JSON.parse(value)]).filter(([key, value]) => key.includes("management.core.windows.net")).map(([, value]) => value).at(0)'  # noqa: E501
+                                    )
+                                    if auth_state is None:
+                                        await asyncio.sleep(1)
+                                except Exception as e:
+                                    if "Execution context was destroyed" in str(e):
+                                        self.logger.debug(
+                                            "Execution context destroyed during "
+                                            "evaluation, retrying..."
+                                        )
+                                        await asyncio.sleep(1)
+                                        continue
+                                    raise
 
                             self.logger.info(
                                 "Retrieved authState from sessionStorage. "
                                 "Updating auth_state..."
                             )
-                            auth_state: AuthState = json.loads(auth_state_raw)
+
+                            # It looks like:
+                            # {
+                            #     "homeAccountId": "c0ec2ea0-4379-4793-92bf-85cab79759e0.e8715ec0-6179-432a-a864-54ea4008adc2", # noqa: E501
+                            #     "credentialType": "AccessToken",
+                            #     "secret": "<token>",
+                            #     "cachedAt": "1783920384",
+                            #     "expiresOn": "1783925614",
+                            #     "extendedExpiresOn": "1783930844",
+                            #     "environment": "login.windows.net",
+                            #     "clientId": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
+                            #     "realm": "e8715ec0-6179-432a-a864-54ea4008adc2",
+                            #     "target": "https://management.core.windows.net//user_impersonation https://management.core.windows.net//.default", # noqa: E501
+                            #     "tokenType": "Bearer",
+                            #     "lastUpdatedAt": "1783920384131"
+                            # }
                             self.auth_state = auth_state
-                            if self.get_auth_state() is None:
-                                break
 
                             self.logger.info(
                                 "auth_state updated successfully. "
                                 "Waiting for token to expire..."
                             )
-                            expires_at = datetime.fromtimestamp(auth_state["expiresAt"])
-                            while expires_at > datetime.now() and not self.stop_requested:
+                            expires_at = datetime.fromtimestamp(
+                                int(auth_state["expiresOn"]),
+                                tz=timezone.utc,
+                            )
+                            while (
+                                expires_at > datetime.now(tz=timezone.utc)
+                                and not self.stop_requested
+                            ):
                                 await asyncio.sleep(1)
 
                             if self.stop_requested:
@@ -128,13 +167,14 @@ class AZPTokenSyncerDaemon:
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     async def main():
         daemon = AZPTokenSyncerDaemon()
 
         loop = asyncio.get_running_loop()
+
         def handle_exit():
             daemon.logger.info("Signal received, requesting stop...")
             daemon.stop_requested = True

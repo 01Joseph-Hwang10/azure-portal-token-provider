@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import asynccontextmanager
-from typing import cast
 
 import uvicorn
 from fastapi import FastAPI
@@ -49,12 +48,12 @@ async def healthz():
 
 @app.get("/token")
 async def get_azure_portal_token():
-    auth_state = cast(AZPTokenSyncerDaemon, app.daemons.azps).get_auth_state()
-    return {
-        "token": auth_state["authHeader"].replace(f"{auth_state['tokenType']} ", ""),
-        "token_type": auth_state["tokenType"],
-        "expires_at": auth_state["expiresAt"],
-    }
+    azps: AZPTokenSyncerDaemon = app.daemons.azps
+    token = azps.get_token()
+    expires_at = azps.get_expires_at()
+    if not token or not expires_at:
+        return {"token": None, "expires_at": None}
+    return {"token": token, "expires_at": expires_at.isoformat()}
 
 
 if __name__ == "__main__":

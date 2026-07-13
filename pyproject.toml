@@ -3,14 +3,13 @@ name = "azure-portal-token-provider"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.13"
 dependencies = [
-  "camoufox[geoip]==0.4.11",
-  "playwright<1.61",
   "fastapi-cloud-logging>=1.1.0",
   "google-cloud-logging>=3.15.0",
   "gunicorn>=26.0.0",
   "httpx>=0.28.1",
+  "playwright>=1.61.0",
   "psycopg[binary]>=3.3.3",
   "pydantic>=2.13.3",
   "pydantic-settings>=2.14.0",
@@ -22,7 +21,7 @@ dependencies = [
 
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py313']
 include = '\.pyi?$'
 exclude = '''
 /(
