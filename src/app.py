@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -15,18 +14,16 @@ from src.daemons.manager import DaemonManager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    azps = AZPTokenSyncerDaemon()
-    asyncio.create_task(azps.run())
-
     app.daemons = DaemonManager()
-    app.daemons.azps = azps
+    app.daemons.register("azps", AZPTokenSyncerDaemon())
+    await app.daemons.start()
 
     app.settings = Settings()
 
     yield
 
     # Shutdown
-    await app.daemons.azps.stop()
+    await app.daemons.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -41,14 +38,9 @@ app.add_middleware(
 )
 
 
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
-
-
 @app.get("/token")
 async def get_azure_portal_token():
-    azps: AZPTokenSyncerDaemon = app.daemons.azps
+    azps: AZPTokenSyncerDaemon = app.daemons.get("azps")
     token = azps.get_token()
     expires_at = azps.get_expires_at()
     if not token or not expires_at:

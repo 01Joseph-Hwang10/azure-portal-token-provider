@@ -1,15 +1,25 @@
+import asyncio
+
+
 class DaemonManager:
     def __init__(self):
-        self._daemons: dict[str, object] = {}
+        self.daemons: list[tuple[str, object]] = []
+        self.tasks: list[asyncio.Task] = []
 
-    def __getattr__(self, name: str):
-        if name == "_daemons":
-            return self.__dict__["_daemons"]
-        if name in self._daemons:
-            return self._daemons[name]
-        raise AttributeError(f"Daemon '{name}' not found.")
+    def get(self, name: str):
+        for daemon_name, daemon in self.daemons:
+            if daemon_name == name:
+                return daemon
+        raise ValueError(f"Daemon with name '{name}' not found.")
 
-    def __setattr__(self, name: str, value: object):
-        if name == "_daemons":
-            self.__dict__["_daemons"] = value
-        self._daemons[name] = value
+    def register(self, name: str, daemon: object):
+        self.daemons.append((name, daemon))
+
+    async def start(self):
+        for name, daemon in self.daemons:
+            task = asyncio.create_task(daemon.run())
+            self.tasks.append(task)
+
+    async def stop(self):
+        for name, daemon in reversed(self.daemons):
+            await daemon.stop()
