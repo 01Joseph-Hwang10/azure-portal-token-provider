@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import signal
 from datetime import datetime
 from logging import Logger, getLogger
 from typing import TypedDict
@@ -35,97 +36,118 @@ class AZPTokenSyncerDaemon:
         self.logger.info("Starting AZPTokenSyncerDaemon...")
 
         try:
-            while True:
+            while not self.stop_requested:
                 options = {
                     "headless": False,
                     "handle_sigint": False,
                     "handle_sigterm": False,
                     "handle_sighup": False,
                 }
-                async with AsyncCamoufox(**options) as browser:
-                    page = await browser.new_page()
-                    await page.goto("https://portal.azure.com")
+                try:
+                    async with AsyncCamoufox(**options) as browser:
+                        page = await browser.new_page()
+                        await page.goto("https://portal.azure.com")
 
-                    self.logger.info("Waiting for Azure Portal to be logged in by user...")
-                    while True:
-                        try:
-                            await page.wait_for_function(
-                                "window.location.href === 'https://portal.azure.com/#home'",
-                                timeout=5000,
-                            )
-                        except Exception:
-                            if self.stop_requested:
+                        self.logger.info("Waiting for Azure Portal to be logged in by user...")
+                        while not self.stop_requested:
+                            try:
+                                await page.wait_for_function(
+                                    "window.location.href === 'https://portal.azure.com/#home'",
+                                    timeout=2000,
+                                )
                                 break
-                            await asyncio.sleep(1)
-
-                    if self.stop_requested:
-                        break
-
-                    while True:
-                        auth_state_raw = await page.evaluate(
-                            'window.sessionStorage.getItem("authState")'
-                        )
-                        if auth_state_raw is None:
-                            break
-
-                        self.logger.info(
-                            "Retrieved authState from sessionStorage. "
-                            "Updating auth_state..."
-                        )
-                        auth_state: AuthState = json.loads(auth_state_raw)
-                        self.auth_state = auth_state
-                        if self.get_auth_state() is None:
-                            break
-
-                        self.logger.info(
-                            "auth_state updated successfully. "
-                            "Waiting for token to expire..."
-                        )
-                        expires_at = datetime.fromtimestamp(auth_state["expiresAt"])
-                        while expires_at > datetime.now():
-                            await asyncio.sleep(1)
-                            if self.stop_requested:
-                                break
+                            except Exception:
+                                if self.stop_requested:
+                                    break
+                                await asyncio.sleep(1)
 
                         if self.stop_requested:
                             break
 
-                        self.logger.info("Token expired. Reloading page...")
-                        await page.reload()
-                        await asyncio.sleep(5)
+                        while not self.stop_requested:
+                            auth_state_raw = await page.evaluate(
+                                'window.sessionStorage.getItem("authState")'
+                            )
+                            if auth_state_raw is None:
+                                break
 
-                if self.stop_requested:
-                    break
+                            self.logger.info(
+                                "Retrieved authState from sessionStorage. "
+                                "Updating auth_state..."
+                            )
+                            auth_state: AuthState = json.loads(auth_state_raw)
+                            self.auth_state = auth_state
+                            if self.get_auth_state() is None:
+                                break
+
+                            self.logger.info(
+                                "auth_state updated successfully. "
+                                "Waiting for token to expire..."
+                            )
+                            expires_at = datetime.fromtimestamp(auth_state["expiresAt"])
+                            while expires_at > datetime.now() and not self.stop_requested:
+                                await asyncio.sleep(1)
+
+                            if self.stop_requested:
+                                break
+
+                            self.logger.info("Token expired. Reloading page...")
+                            await page.reload()
+                            for _ in range(5):
+                                if self.stop_requested:
+                                    break
+                                await asyncio.sleep(1)
+                except Exception as e:
+                    if self.stop_requested:
+                        break
+                    self.logger.error(f"Error in browser loop: {e}")
+                    for _ in range(5):
+                        if self.stop_requested:
+                            break
+                        await asyncio.sleep(1)
         finally:
             self.stopped = True
+            self.logger.info("AZPTokenSyncerDaemon loop exited.")
 
     async def stop(self):
+        if self.stopped:
+            return
         self.stop_requested = True
         self.logger.info(
             "Stop requested for AZPTokenSyncerDaemon. Waiting for it to stop..."
         )
-        timeout = 30
+        timeout = 10
         while not self.stopped:
             if timeout <= 0:
                 break
             await asyncio.sleep(1)
             timeout -= 1
-        if not self.stopped:
-            raise RuntimeError("Failed to stop AZPTokenSyncerDaemon within timeout")
-        self.logger.info("AZPTokenSyncerDaemon stopped successfully.")
+        self.logger.info("AZPTokenSyncerDaemon stop sequence completed.")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
 
     async def main():
         daemon = AZPTokenSyncerDaemon()
+
+        loop = asyncio.get_running_loop()
+        def handle_exit():
+            daemon.logger.info("Signal received, requesting stop...")
+            daemon.stop_requested = True
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, handle_exit)
+            except NotImplementedError:
+                pass
+
         try:
             await daemon.run()
-        except (asyncio.CancelledError, KeyboardInterrupt):
+        finally:
             await daemon.stop()
 
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
