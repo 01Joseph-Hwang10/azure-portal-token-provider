@@ -63,6 +63,9 @@ class HealthCheckDaemon:
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

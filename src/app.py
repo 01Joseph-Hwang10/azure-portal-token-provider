@@ -1,5 +1,9 @@
+import asyncio
+import os
 from contextlib import asynccontextmanager
 
+import asyncio
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +31,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
@@ -49,11 +57,13 @@ async def get_azure_portal_token():
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
     uvicorn.run(
         "src.app:app",
         host="127.0.0.1",
         port=8000,
-        loop="asyncio",
-        reload=True,
+        reload=False,
         access_log=False,
     )

@@ -1,8 +1,6 @@
 import asyncio
-import logging
 import os
 import signal
-import sys
 from datetime import datetime, timezone
 from logging import Logger, getLogger
 from typing import Any
@@ -69,7 +67,11 @@ class AZPTokenSyncerDaemon:
                                 if self.stop_requested:
                                     break
                                 # If the page is closed, break the inner loop to restart
-                                if "Target closed" in str(e) or "Target page, context or browser has been closed" in str(e):
+                                if "Target closed" in str(
+                                    e
+                                ) or "Target page, context or browser has been closed" in str(
+                                    e
+                                ):
                                     self.logger.warning("Browser page closed.")
                                     break
                                 await asyncio.sleep(1)
@@ -101,11 +103,15 @@ class AZPTokenSyncerDaemon:
                                         )
                                         await asyncio.sleep(1)
                                         continue
-                                    if "Target closed" in str(e) or "Target page, context or browser has been closed" in str(e):
+                                    if "Target closed" in str(
+                                        e
+                                    ) or "Target page, context or browser has been closed" in str(
+                                        e
+                                    ):
                                         self.logger.warning("Browser page closed.")
                                         break
                                     raise
-                            
+
                             if auth_state is None:
                                 break
 
@@ -186,6 +192,11 @@ class AZPTokenSyncerDaemon:
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+    import logging
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -207,6 +218,7 @@ if __name__ == "__main__":
                 except NotImplementedError:
                     pass
         else:
+
             def handle_exit_win(sig, frame):
                 daemon.logger.info(f"Signal {sig} received, requesting stop...")
                 daemon.stop_requested = True
