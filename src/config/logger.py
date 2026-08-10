@@ -1,5 +1,6 @@
 import logging
 from logging import Logger, basicConfig, getLevelName, getLogger
+from logging.handlers import RotatingFileHandler
 
 import google.cloud.logging
 from fastapi_cloud_logging.fastapi_cloud_logging_handler import FastAPILoggingFilter
@@ -57,6 +58,12 @@ def get_logger(level: str) -> Logger:
             getLogger(name).setLevel(logging.INFO)
 
     logger = getLogger("Logger")
+
+    if not is_gcp():
+        # Set max size to 5 MB (5 * 1024 * 1024 bytes) and keep 3 backup files
+        handler = RotatingFileHandler("app.log", maxBytes=5242880, backupCount=3)
+        logger.addHandler(handler)
+
     return logger
 
 
