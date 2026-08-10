@@ -41,6 +41,7 @@ name = "azure-portal-token-provider"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "fastapi-cloud-logging" },
     { name = "google-cloud-logging" },
     { name = "gunicorn" },
@@ -63,6 +64,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.139.0" },
     { name = "fastapi-cloud-logging", specifier = ">=1.1.0" },
     { name = "google-cloud-logging", specifier = ">=3.15.0" },
     { name = "gunicorn", specifier = ">=26.0.0" },
